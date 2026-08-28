@@ -1,5 +1,12 @@
 # KuaiRand-Pure Starter Kit
 
+> Planning an autonomous research system on top of this kit? Start with
+> [architecture.md](architecture.md), then see the
+> [companion system plan](docs/agent-ml-system-plan.md).
+>
+> For the recommender-system ML workflow, experiment ladder, and engineering
+> checklists, see [ML.md](ML.md).
+
 ## Dependencies
 
 Python 3.9+ and `numpy`. That's it — no `torch`, `pandas`, or `sklearn` required.
