@@ -5,7 +5,9 @@ Repository target: KuaiRand-Pure autonomous ML research agent
 Competition task: rank each user's logged impressions for `long_view`
 
 For the decision-by-decision agent tuning loop, see the
-[detailed ML flowchart and agent decision map](docs/ml-agent-tuning-flow.md).
+[detailed ML flowchart and agent decision map](nam-ml-agent-tuning-flow.md).
+For decision-routed recommender context, see the
+[recommender-systems knowledge index](../knowledge/recommender-systems/README.md).
 
 ## 1. What a recommender-system ML engineer does
 

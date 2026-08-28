@@ -1,6 +1,11 @@
 # Detailed ML Flow and Agent Decision Map
 
-![Recommender ML workflow with agent tuning decisions](ml-agent-tuning-flowchart.png)
+![Recommender ML workflow with agent tuning decisions](nam-ml-agent-tuning-flowchart.png)
+
+Decision-time recommender knowledge is indexed in
+[the recommender-system knowledge base](../knowledge/recommender-systems/README.md).
+Load its routing guide and only the topic files needed for the current evidence gap;
+record their `knowledge_id` values in D3-D5 outputs.
 
 Related documents:
 
@@ -790,4 +795,3 @@ D13 Deterministic:
 - [ ] The next experiment uses the updated Evidence Pack.
 
 The result is an agent that makes useful research decisions without becoming the source of truth for data, metrics, or experiment validity.
-

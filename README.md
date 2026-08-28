@@ -163,3 +163,4 @@ Note on CWM: it requires `torch==1.6.0` (older GPU drivers may not support this)
 | `baseline_scores.json` | Official scores + seed variances + convergence parameters.                          |
 | `submit.py`            | Create / validate submission files.                                                 |
 | `ablation_features.py` | Feature ablation experiments; reproduces the "no gain from added features" numbers. |
+| `knowledge/recommender-systems/` | Decision-routed recommender-system context for the ML agents.              |
