@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "workspace": "..",
+  "run_root": "artifacts/agent_runs",
+  "benchmark": {
+    "name": "KuaiRand-Pure",
+    "profile": "competition",
+    "positive_label": "is_click"
+  },
+  "metrics": {
+    "names": ["NDCG@10", "Recall@50"],
+    "selection": "official_selection_score",
+    "maximize": true
+  },
+  "budget": {
+    "iterations": 50,
+    "wall_clock_seconds": 21600
+  },
+  "convergence": {
+    "epsilon": 0.002,
+    "patience": 3
+  },
+  "planner": {
+    "mode": "llm",
+    "provider": "gemini",
+    "model": "gemini-3.7-flash",
+    "api_key_env": "GEMINI_API_KEY",
+    "env_file": ".env",
+    "api_timeout_seconds": 90,
+    "max_output_tokens": 1200,
+    "timeout_seconds": 120,
+    "fallback_to_catalog": true
+  },
+  "assets": [
+    {"role": "official_baseline", "path": "official/baseline.py", "sha256": "REPLACE_WITH_ORGANIZER_SHA256"},
+    {"role": "official_evaluator", "path": "official/evaluate.py", "sha256": "REPLACE_WITH_ORGANIZER_SHA256"},
+    {"role": "train", "path": "official/data/train", "kind": "directory"},
+    {"role": "validation", "path": "official/data/validation", "kind": "directory"},
+    {"role": "submission_schema", "path": "official/submission_schema.json", "sha256": "REPLACE_WITH_ORGANIZER_SHA256"}
+  ],
+  "forbidden_paths": [
+    "official/data/hidden_test_labels.csv"
+  ],
+  "official_baseline": {
+    "command": [
+      "{python}", "official/baseline.py",
+      "--split", "validation",
+      "--result", "{result_path}",
+      "--submission", "{submission_path}"
+    ],
+    "timeout_seconds": 1800,
+    "expected_metrics": {
+      "NDCG@10": 0.0,
+      "Recall@50": 0.0,
+      "official_selection_score": 0.0
+    },
+    "tolerance": 0.000001
+  },
+  "submission": {
+    "validation_command": [
+      "{python}", "official/validate_submission.py",
+      "--split", "validation",
+      "--submission", "{submission_path}"
+    ],
+    "timeout_seconds": 300
+  },
+  "recovery": {
+    "retry_transient_once": true
+  },
+  "experiments": []
+}

@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "workspace": "..",
+  "run_root": "artifacts/agent_runs",
+  "benchmark": {
+    "name": "KuaiRand-Pure-Public-Research",
+    "profile": "public_research",
+    "positive_label": "is_click"
+  },
+  "metrics": {
+    "names": ["NDCG@10", "Recall@50"],
+    "selection": "official_selection_score",
+    "maximize": true
+  },
+  "budget": {
+    "iterations": 50,
+    "wall_clock_seconds": 21600
+  },
+  "convergence": {
+    "epsilon": 0.002,
+    "patience": 3
+  },
+  "command_poll_seconds": 1.0,
+  "planner": {
+    "mode": "command",
+    "command": [
+      "{python}", "-m", "automl_agent.planner_cli",
+      "--evidence", "{evidence_path}",
+      "--decision", "{decision_path}"
+    ],
+    "timeout_seconds": 30,
+    "fallback_to_catalog": true
+  },
+  "assets": [
+    {"role": "official_baseline", "path": "examples/kuairand_public_benchmark.py"},
+    {"role": "official_evaluator", "path": "examples/kuairand_public_benchmark.py"},
+    {"role": "train", "path": "KuaiRand-Pure/data/log_standard_4_08_to_4_21_pure.csv"},
+    {"role": "validation", "path": "KuaiRand-Pure/data/log_standard_4_22_to_5_08_pure.csv"},
+    {"role": "submission_schema", "path": "examples/demo/submission_schema.json"},
+    {"role": "video_features", "path": "KuaiRand-Pure/data/video_features_basic_pure.csv"},
+    {"role": "public_data_manifest", "path": "data_manifests/kuairand-pure-public.json"}
+  ],
+  "forbidden_paths": [
+    "official/data/hidden_test_labels.csv"
+  ],
+  "official_baseline": {
+    "command": [
+      "{python}", "examples/kuairand_public_benchmark.py", "run",
+      "--strategy", "official_baseline",
+      "--train", "KuaiRand-Pure/data/log_standard_4_08_to_4_21_pure.csv",
+      "--validation", "KuaiRand-Pure/data/log_standard_4_22_to_5_08_pure.csv",
+      "--video-features", "KuaiRand-Pure/data/video_features_basic_pure.csv",
+      "--result", "{result_path}",
+      "--submission", "{submission_path}"
+    ],
+    "timeout_seconds": 600,
+    "expected_metrics": {
+      "NDCG@10": 0.6815376863260292,
+      "Recall@50": 0.8976968209507449,
+      "official_selection_score": 0.789617253638387
+    },
+    "tolerance": 0.000000000001
+  },
+  "submission": {
+    "validation_command": [
+      "{python}", "examples/kuairand_public_benchmark.py", "validate",
+      "--validation", "KuaiRand-Pure/data/log_standard_4_22_to_5_08_pure.csv",
+      "--submission", "{submission_path}"
+    ],
+    "timeout_seconds": 180
+  },
+  "recovery": {
+    "retry_transient_once": true
+  },
+  "experiments": [
+    {
+      "id": "author_context",
+      "family": "context",
+      "priority": 90,
+      "hypothesis": "Smoothed author click rate will improve ranking over item rate alone.",
+      "knowledge_ids": ["rs_content_features", "rs_context_fm"],
+      "expected_effect": "Improve NDCG@10",
+      "timeout_seconds": 600,
+      "command": [
+        "{python}", "examples/kuairand_public_benchmark.py", "run",
+        "--strategy", "author_context",
+        "--train", "KuaiRand-Pure/data/log_standard_4_08_to_4_21_pure.csv",
+        "--validation", "KuaiRand-Pure/data/log_standard_4_22_to_5_08_pure.csv",
+        "--video-features", "KuaiRand-Pure/data/video_features_basic_pure.csv",
+        "--result", "{result_path}", "--submission", "{submission_path}"
+      ]
+    },
+    {
+      "id": "user_tab_affinity",
+      "family": "context",
+      "priority": 95,
+      "hypothesis": "Past per-user tab preference will improve within-user click ordering.",
+      "knowledge_ids": ["rs_context_fm"],
+      "expected_effect": "Improve NDCG@10",
+      "timeout_seconds": 600,
+      "command": [
+        "{python}", "examples/kuairand_public_benchmark.py", "run",
+        "--strategy", "user_tab_affinity",
+        "--train", "KuaiRand-Pure/data/log_standard_4_08_to_4_21_pure.csv",
+        "--validation", "KuaiRand-Pure/data/log_standard_4_22_to_5_08_pure.csv",
+        "--video-features", "KuaiRand-Pure/data/video_features_basic_pure.csv",
+        "--result", "{result_path}", "--submission", "{submission_path}"
+      ]
+    },
+    {
+      "id": "hybrid_context",
+      "family": "context",
+      "priority": 85,
+      "hypothesis": "A smoothed item, author, tab, and duration blend will combine complementary context.",
+      "knowledge_ids": ["rs_hybrid_ensemble", "rs_context_fm"],
+      "expected_effect": "Improve the public research selection score",
+      "timeout_seconds": 600,
+      "command": [
+        "{python}", "examples/kuairand_public_benchmark.py", "run",
+        "--strategy", "hybrid_context",
+        "--train", "KuaiRand-Pure/data/log_standard_4_08_to_4_21_pure.csv",
+        "--validation", "KuaiRand-Pure/data/log_standard_4_22_to_5_08_pure.csv",
+        "--video-features", "KuaiRand-Pure/data/video_features_basic_pure.csv",
+        "--result", "{result_path}", "--submission", "{submission_path}"
+      ]
+    }
+  ]
+}

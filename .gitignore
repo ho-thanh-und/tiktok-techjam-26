@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+artifacts/
+.demo-baseline-result.json
+.demo-baseline-submission.csv
+.public-baseline-result.json
+.public-baseline-submission.csv
+KuaiRand-Pure.tar.gz
+KuaiRand-Pure/LICENSE
+KuaiRand-Pure/data/

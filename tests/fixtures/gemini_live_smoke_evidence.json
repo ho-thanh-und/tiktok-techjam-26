@@ -1,0 +1,29 @@
+{
+  "baseline": null,
+  "benchmark": "synthetic-api-connectivity-check",
+  "candidates": [
+    {
+      "expected_effect": "Verify structured planner connectivity only",
+      "experiment_id": "safe_smoke_candidate",
+      "family": "connectivity",
+      "hypothesis": "A valid structured response confirms the provider integration.",
+      "knowledge_ids": [],
+      "priority": 1
+    }
+  ],
+  "constraints": {
+    "choose_exactly_one_candidate": true,
+    "hidden_test_available": false,
+    "may_not_change_metrics_or_split": true
+  },
+  "incumbent": null,
+  "iteration_cap": 1,
+  "iterations_used": 0,
+  "metrics": [
+    "synthetic_metric"
+  ],
+  "positive_label": "synthetic_label",
+  "previous_experiments": [],
+  "schema_version": 1,
+  "selection_metric": "synthetic_metric"
+}

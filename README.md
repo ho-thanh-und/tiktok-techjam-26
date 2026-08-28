@@ -1,4 +1,36 @@
-# KuaiRand-Pure Starter Kit
+# Autonomous ML Research Agent
+
+This repository now includes a working, resumable autonomous ML control plane. Start with the [product guide](docs/product.md) and repository rules in [AGENTS.md](AGENTS.md).
+
+```powershell
+python -m automl_agent --config configs/demo.json preflight
+python -m automl_agent --config configs/demo.json run --run-id demo-001
+python -m unittest discover -s tests -v
+python -m automl_agent --config configs/demo.json serve --port 8765
+```
+
+To let Gemini 3.7 Flash choose each catalog experiment, open the ignored root `.env` file and set:
+
+```dotenv
+GEMINI_API_KEY=your_real_key_here
+```
+
+Then use the LLM configuration:
+
+```powershell
+python -m automl_agent --config configs/demo-llm.json preflight
+python -m automl_agent --config configs/demo-llm.json run --run-id llm-demo-001
+```
+
+The `.env` file is excluded from Git. The key is not copied into configuration or artifacts. Offline tests use local reasoning responses and do not call Gemini.
+
+The demo exercises click-positive NDCG@10/Recall@50 orchestration end to end. The competition configuration intentionally fails closed until the organizer-provided baseline, evaluator, split, official selection score, and schema are supplied.
+
+With the public KuaiRand-Pure files installed, `configs/kuairand-public-research.json` provides a real-data integration run. It is explicitly non-competition and cannot substitute for the organizer protocol.
+
+## Legacy KuaiRand-Pure Starter Kit
+
+The material below describes the original `long_view`/GAUC/nDCG@5 starter pipeline. It is retained for reference but does **not** match the current competition contract and must not be used as the official baseline.
 
 > Planning an autonomous research system on top of this kit? Start with
 > [architecture.md](architecture.md), then see the

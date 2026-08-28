@@ -1,0 +1,24 @@
+{
+  "id": "resp_offline_reasoning_fixture",
+  "model": "offline-test-reasoner",
+  "object": "response",
+  "output": [
+    {
+      "content": [
+        {
+          "text": "{\"experiment_id\":\"category_affinity\",\"reason\":\"Test personalized category affinity first: it directly addresses the baseline's lack of user-context preference while changing one interpretable ranking signal.\",\"evidence\":[\"category_affinity has the highest untested priority (100)\",\"Its hypothesis targets both configured metrics: NDCG@10 and Recall@50\",\"No previous experiment outcome contradicts the context-family hypothesis\"]}",
+          "type": "output_text"
+        }
+      ],
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "status": "completed",
+  "usage": {
+    "input_tokens": 240,
+    "output_tokens": 81,
+    "total_tokens": 321
+  }
+}

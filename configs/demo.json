@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "workspace": "..",
+  "run_root": "artifacts/agent_runs",
+  "benchmark": {
+    "name": "KuaiRand-Demo",
+    "profile": "demo",
+    "positive_label": "is_click"
+  },
+  "metrics": {
+    "names": ["NDCG@10", "Recall@50"],
+    "selection": "official_selection_score",
+    "maximize": true
+  },
+  "budget": {
+    "iterations": 50,
+    "wall_clock_seconds": 21600
+  },
+  "convergence": {
+    "epsilon": 0.002,
+    "patience": 3
+  },
+  "command_poll_seconds": 0.1,
+  "planner": {
+    "mode": "command",
+    "command": [
+      "{python}", "-m", "automl_agent.planner_cli",
+      "--evidence", "{evidence_path}",
+      "--decision", "{decision_path}"
+    ],
+    "timeout_seconds": 15,
+    "fallback_to_catalog": true
+  },
+  "assets": [
+    {"role": "official_baseline", "path": "examples/demo_benchmark.py"},
+    {"role": "official_evaluator", "path": "examples/demo_benchmark.py"},
+    {"role": "train", "path": "examples/demo/train_spec.json"},
+    {"role": "validation", "path": "examples/demo/validation_spec.json"},
+    {"role": "submission_schema", "path": "examples/demo/submission_schema.json"}
+  ],
+  "forbidden_paths": [
+    "examples/demo/hidden_test_labels.csv"
+  ],
+  "official_baseline": {
+    "command": [
+      "{python}", "examples/demo_benchmark.py", "run",
+      "--strategy", "official_baseline",
+      "--train-spec", "examples/demo/train_spec.json",
+      "--validation-spec", "examples/demo/validation_spec.json",
+      "--result", "{result_path}",
+      "--submission", "{submission_path}"
+    ],
+    "timeout_seconds": 30,
+    "expected_metrics": {
+      "NDCG@10": 0.2656906524375156,
+      "Recall@50": 0.6286657784117738,
+      "official_selection_score": 0.44717821542464475
+    },
+    "tolerance": 1e-12
+  },
+  "submission": {
+    "validation_command": [
+      "{python}", "examples/demo_benchmark.py", "validate",
+      "--validation-spec", "examples/demo/validation_spec.json",
+      "--submission", "{submission_path}"
+    ],
+    "timeout_seconds": 15
+  },
+  "recovery": {
+    "retry_transient_once": true
+  },
+  "experiments": [
+    {
+      "id": "category_affinity",
+      "family": "context",
+      "priority": 100,
+      "hypothesis": "Past click rate by user and item category will rank preferred categories above globally popular items.",
+      "knowledge_ids": ["rs_context_fm", "rs_content_features"],
+      "expected_effect": "Improve NDCG@10 and Recall@50",
+      "timeout_seconds": 30,
+      "command": [
+        "{python}", "examples/demo_benchmark.py", "run",
+        "--strategy", "category_affinity",
+        "--train-spec", "examples/demo/train_spec.json",
+        "--validation-spec", "examples/demo/validation_spec.json",
+        "--result", "{result_path}",
+        "--submission", "{submission_path}"
+      ]
+    },
+    {
+      "id": "hybrid_affinity_popularity",
+      "family": "context",
+      "priority": 95,
+      "hypothesis": "A small popularity component will break contextual ties using item quality.",
+      "knowledge_ids": ["rs_hybrid_ensemble", "rs_context_fm"],
+      "expected_effect": "Improve top-10 ordering without losing recall",
+      "timeout_seconds": 30,
+      "command": [
+        "{python}", "examples/demo_benchmark.py", "run",
+        "--strategy", "hybrid_affinity_popularity",
+        "--train-spec", "examples/demo/train_spec.json",
+        "--validation-spec", "examples/demo/validation_spec.json",
+        "--result", "{result_path}",
+        "--submission", "{submission_path}"
+      ]
+    },
+    {
+      "id": "shrinkage_popularity",
+      "family": "popularity",
+      "priority": 80,
+      "hypothesis": "Additional global shrinkage will stabilize item popularity estimates.",
+      "knowledge_ids": ["rs_neighborhood_cf"],
+      "expected_effect": "Small ranking stability improvement",
+      "timeout_seconds": 30,
+      "command": [
+        "{python}", "examples/demo_benchmark.py", "run",
+        "--strategy", "shrinkage_popularity",
+        "--train-spec", "examples/demo/train_spec.json",
+        "--validation-spec", "examples/demo/validation_spec.json",
+        "--result", "{result_path}",
+        "--submission", "{submission_path}"
+      ]
+    },
+    {
+      "id": "noise_control",
+      "family": "control",
+      "priority": 10,
+      "hypothesis": "A deterministic noise control should not beat an evidence-based incumbent.",
+      "knowledge_ids": ["rs_evaluation_bias"],
+      "expected_effect": "Negative control",
+      "timeout_seconds": 30,
+      "command": [
+        "{python}", "examples/demo_benchmark.py", "run",
+        "--strategy", "noise_control",
+        "--train-spec", "examples/demo/train_spec.json",
+        "--validation-spec", "examples/demo/validation_spec.json",
+        "--result", "{result_path}",
+        "--submission", "{submission_path}"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "columns": ["row_id", "user_id", "item_id", "score"],
+  "format": "csv",
+  "row_order": "validation candidate order"
+}
+
