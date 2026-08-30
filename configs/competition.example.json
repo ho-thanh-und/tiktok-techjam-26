@@ -22,13 +22,14 @@
   },
   "planner": {
     "mode": "llm",
-    "provider": "gemini",
-    "model": "gemini-3.7-flash",
-    "api_key_env": "GEMINI_API_KEY",
+    "provider": "soc",
+    "model": "qwen3.8:27b",
+    "base_url": "https://soclaas-api.comp.nus.edu.sg/v1",
+    "api_key_env": "SOC_API_KEY",
     "env_file": ".env",
-    "api_timeout_seconds": 90,
+    "api_timeout_seconds": 180,
     "max_output_tokens": 1200,
-    "timeout_seconds": 120,
+    "timeout_seconds": 210,
     "fallback_to_catalog": true
   },
   "assets": [

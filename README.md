@@ -9,10 +9,10 @@ python -m unittest discover -s tests -v
 python -m automl_agent --config configs/demo.json serve --port 8765
 ```
 
-To let Gemini 3.7 Flash choose each catalog experiment, open the ignored root `.env` file and set:
+To let the NUS SoC-hosted planner choose each catalog experiment, open the ignored root `.env` file and set:
 
 ```dotenv
-GEMINI_API_KEY=your_real_key_here
+SOC_API_KEY=your_real_key_here
 ```
 
 Then use the LLM configuration:
@@ -22,7 +22,9 @@ python -m automl_agent --config configs/demo-llm.json preflight
 python -m automl_agent --config configs/demo-llm.json run --run-id llm-demo-001
 ```
 
-The `.env` file is excluded from Git. The key is not copied into configuration or artifacts. Offline tests use local reasoning responses and do not call Gemini.
+The `.env` file is excluded from Git. The key is not copied into configuration or artifacts. The default SoC model is `qwen3.8:27b`; offline tests use a local compatible endpoint and make no external API calls.
+
+During a run, timestamped `START`, `WAIT`, `FAIL`, `RETRY`, `DECISION`, `RESULT`, and `COMPLETE` messages show live progress. Full child-process logs remain under `artifacts/agent_runs/<run-id>/`; transient API failures are shown directly and retried once.
 
 The demo exercises click-positive NDCG@10/Recall@50 orchestration end to end. The competition configuration intentionally fails closed until the organizer-provided baseline, evaluator, split, official selection score, and schema are supplied.
 

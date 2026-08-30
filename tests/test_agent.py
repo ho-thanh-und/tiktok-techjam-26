@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import sys
 import tempfile
@@ -8,6 +9,7 @@ import unittest
 import csv
 import threading
 import urllib.request
+from contextlib import redirect_stderr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -21,9 +23,12 @@ from automl_agent.storage import RunStore
 from automl_agent.kuairand_manifest import FEATURE_FILES, LOG_FILES, build_manifest
 from automl_agent.dashboard import make_server
 from automl_agent.env_file import load_env_file
+from automl_agent.io_utils import read_json
 from automl_agent.llm_planner_cli import (
+    LLMPlannerError,
     build_gemini_request,
     build_request,
+    build_soc_request,
     main as llm_planner_main,
     parse_decision,
 )
@@ -98,6 +103,22 @@ class ReliabilityTests(unittest.TestCase):
                     poll_seconds=0.05,
                 )
             self.assertEqual(raised.exception.failure_class, "timeout")
+
+    def test_labeled_command_prints_start_and_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            with redirect_stderr(output):
+                run_command(
+                    (sys.executable, "-c", "print('ok')"),
+                    cwd=ROOT,
+                    output_dir=Path(temporary),
+                    timeout_seconds=5,
+                    poll_seconds=0.05,
+                    label="visible test stage",
+                )
+            rendered = output.getvalue()
+            self.assertIn("START: visible test stage", rendered)
+            self.assertIn("DONE: visible test stage", rendered)
 
 
 class EnvFileTests(unittest.TestCase):
@@ -186,6 +207,75 @@ class LLMPlannerTests(unittest.TestCase):
         self.assertEqual(decision["experiment_id"], "category_affinity")
         self.assertEqual(decision["resources"]["llm_tokens"], 47)
 
+    def test_soc_request_uses_chat_completions_schema(self) -> None:
+        request = build_soc_request(
+            self.evidence, model="qwen3.8:27b", max_output_tokens=500
+        )
+        response_format = request["response_format"]["json_schema"]
+        self.assertTrue(response_format["strict"])
+        self.assertEqual(
+            response_format["schema"]["properties"]["experiment_id"]["enum"],
+            ["category_affinity", "noise_control"],
+        )
+        self.assertEqual(request["temperature"], 0)
+
+    def test_corrupt_json_artifact_names_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            broken = Path(temporary) / "result.json"
+            broken.write_text('{"metrics": {"NDCG@10": 0.7', encoding="utf-8")
+            with self.assertRaises(ValueError) as caught:
+                read_json(broken)
+        self.assertIn("result.json", str(caught.exception))
+        self.assertIn("is not valid JSON", str(caught.exception))
+
+    def test_soc_request_disables_thinking_by_default(self) -> None:
+        request = build_soc_request(
+            self.evidence, model="qwen3.8:27b", max_output_tokens=500
+        )
+        self.assertEqual(request["chat_template_kwargs"], {"enable_thinking": False})
+        thinking = build_soc_request(
+            self.evidence,
+            model="qwen3.8:27b",
+            max_output_tokens=4000,
+            enable_thinking=True,
+        )
+        self.assertEqual(thinking["chat_template_kwargs"], {"enable_thinking": True})
+
+    def test_soc_reasoning_truncation_is_reported_actionably(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": None, "reasoning": "We need to weigh..."},
+                }
+            ],
+            "usage": {"total_tokens": 1200},
+        }
+        with self.assertRaises(LLMPlannerError) as caught:
+            parse_decision(response, self.evidence, provider="soc")
+        message = str(caught.exception)
+        self.assertIn("truncated by max_tokens", message)
+        self.assertIn("chain-of-thought", message)
+
+    def test_soc_response_becomes_audited_decision(self) -> None:
+        raw_decision = {
+            "experiment_id": "category_affinity",
+            "reason": "Test the strongest personalized context hypothesis.",
+            "evidence": ["priority=100"],
+        }
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps(raw_decision)},
+                }
+            ],
+            "usage": {"total_tokens": 68},
+        }
+        decision = parse_decision(response, self.evidence, provider="soc")
+        self.assertEqual(decision["experiment_id"], "category_affinity")
+        self.assertEqual(decision["resources"]["llm_tokens"], 68)
+
     def test_offline_reasoning_response_becomes_audited_decision(self) -> None:
         response = json.loads(
             (ROOT / "tests" / "fixtures" / "llm_reasoning_response.json").read_text(
@@ -272,20 +362,39 @@ class KuaiRandManifestTests(unittest.TestCase):
 class EndToEndTests(unittest.TestCase):
     def test_llm_mode_runs_end_to_end_against_offline_reasoning_api(self) -> None:
         requests: list[dict[str, object]] = []
+        request_attempt = 0
 
         class ReasoningHandler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
+                nonlocal request_attempt
+                request_attempt += 1
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                evidence = json.loads(payload["contents"][0]["parts"][0]["text"])
+                if request_attempt == 1:
+                    requests.append(
+                        {
+                            "api_key": self.headers.get("Authorization"),
+                            "transient": True,
+                        }
+                    )
+                    body = json.dumps(
+                        {"error": {"code": 503, "message": "temporary high demand"}}
+                    ).encode("utf-8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                evidence = json.loads(payload["messages"][1]["content"])
                 candidates = evidence["candidates"]
                 selected = max(candidates, key=lambda item: (item["priority"], item["experiment_id"]))
-                allowed = payload["generationConfig"]["responseFormat"]["text"]["schema"][
+                allowed = payload["response_format"]["json_schema"]["schema"][
                     "properties"
                 ]["experiment_id"]["enum"]
                 requests.append(
                     {
-                        "api_key": self.headers.get("x-goog-api-key"),
+                        "api_key": self.headers.get("Authorization"),
                         "selected": selected["experiment_id"],
                         "allowed": allowed,
                     }
@@ -303,17 +412,13 @@ class EndToEndTests(unittest.TestCase):
                     ],
                 }
                 response = {
-                    "candidates": [
+                    "choices": [
                         {
-                            "finishReason": "STOP",
-                            "content": {"parts": [{"text": json.dumps(decision)}]},
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps(decision)},
                         }
                     ],
-                    "usageMetadata": {
-                        "promptTokenCount": 20,
-                        "candidatesTokenCount": 10,
-                        "totalTokenCount": 30,
-                    },
+                    "usage": {"total_tokens": 30},
                 }
                 body = json.dumps(response).encode("utf-8")
                 self.send_response(200)
@@ -328,7 +433,7 @@ class EndToEndTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), ReasoningHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        key_name = "AUTOML_TEST_GEMINI_API_KEY"
+        key_name = "AUTOML_TEST_SOC_API_KEY"
         previous_key = os.environ.get(key_name)
         os.environ[key_name] = "offline-test-key"
         try:
@@ -339,6 +444,7 @@ class EndToEndTests(unittest.TestCase):
                 source["run_root"] = str(root / "runs")
                 source["planner"].update(
                     {
+                        "provider": "soc",
                         "model": "offline-test-reasoner",
                         "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
                         "api_key_env": key_name,
@@ -362,9 +468,14 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(state["stop_reason"], "converged")
             self.assertEqual(state["final"]["experiment_id"], "category_affinity")
             self.assertEqual(state["final"]["resource_usage"]["llm_tokens"], 120)
-            self.assertEqual(len(requests), 4)
-            self.assertTrue(all(item["api_key"] == "offline-test-key" for item in requests))
-            self.assertTrue(all(item["selected"] in item["allowed"] for item in requests))
+            self.assertEqual(len(requests), 5)
+            self.assertTrue(
+                all(item["api_key"] == "Bearer offline-test-key" for item in requests)
+            )
+            successful_requests = [item for item in requests if not item.get("transient")]
+            self.assertTrue(
+                all(item["selected"] in item["allowed"] for item in successful_requests)
+            )
             self.assertTrue(all(mode == "llm" for mode in record_modes))
         finally:
             server.shutdown()

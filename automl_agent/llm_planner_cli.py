@@ -18,6 +18,8 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_MODEL = "gpt-5-mini"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 GEMINI_MODEL = "gemini-3.7-flash"
+SOC_BASE_URL = "https://soclaas-api.comp.nus.edu.sg/v1"
+SOC_MODEL = "qwen3.8:27b"
 
 PLANNER_INSTRUCTIONS = """You are the research planner for a recommender-system AutoML run.
 Choose exactly one experiment from the candidates in the supplied EvidencePack.
@@ -123,6 +125,50 @@ def build_gemini_request(evidence: dict[str, Any], *, max_output_tokens: int) ->
     }
 
 
+def build_soc_request(
+    evidence: dict[str, Any],
+    *,
+    model: str,
+    max_output_tokens: int,
+    enable_thinking: bool = False,
+) -> dict[str, Any]:
+    """Build an OpenAI-compatible Chat Completions request for SoC LaaS.
+
+    SoC serves reasoning models (Qwen3) behind vLLM. Their chain-of-thought is
+    emitted before the answer and counts against ``max_tokens``, so a modest
+    budget is spent entirely on reasoning and the response stops with
+    ``finish_reason="length"`` before any JSON content exists. Thinking is
+    therefore disabled by default; the planner only needs the audited decision.
+    """
+    if not model.strip():
+        raise LLMPlannerError("Model must be a non-empty string")
+    if max_output_tokens <= 0:
+        raise LLMPlannerError("max_output_tokens must be positive")
+    return {
+        "model": model,
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
+        "messages": [
+            {"role": "system", "content": PLANNER_INSTRUCTIONS},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    evidence, ensure_ascii=False, separators=(",", ":")
+                ),
+            },
+        ],
+        "max_tokens": max_output_tokens,
+        "temperature": 0,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "automl_experiment_decision",
+                "strict": True,
+                "schema": _decision_schema(evidence),
+            },
+        },
+    }
+
+
 def _safe_api_error(body: bytes, status: int, provider_name: str) -> str:
     try:
         parsed = json.loads(body.decode("utf-8", errors="replace"))
@@ -209,6 +255,24 @@ def request_gemini(
     )
 
 
+def request_soc(
+    payload: dict[str, Any],
+    *,
+    api_key: str,
+    base_url: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    if not api_key.strip():
+        raise LLMPlannerError("The configured API-key environment variable is empty")
+    return _request_json(
+        f"{base_url.rstrip('/')}/chat/completions",
+        payload,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout_seconds=timeout_seconds,
+        provider_name="NUS SoC Chat Completions",
+    )
+
+
 def _openai_output_text(response: dict[str, Any]) -> str:
     direct = response.get("output_text")
     if isinstance(direct, str) and direct.strip():
@@ -287,6 +351,32 @@ def _gemini_token_count(response: dict[str, Any]) -> int:
     return sum(values) if all(isinstance(value, int) and value >= 0 for value in values) else 0
 
 
+def _soc_output_text(response: dict[str, Any]) -> str:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise LLMPlannerError("SoC response contained no choice")
+    choice = choices[0]
+    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    finish_reason = choice.get("finish_reason")
+    if finish_reason == "length":
+        reasoned = isinstance(message.get("reasoning"), str) and message["reasoning"].strip()
+        hint = (
+            " The model spent the whole token budget on chain-of-thought; disable"
+            " thinking or raise planner.max_output_tokens above 4000."
+            if reasoned
+            else " Raise planner.max_output_tokens."
+        )
+        raise LLMPlannerError("SoC response was truncated by max_tokens." + hint)
+    if finish_reason not in {None, "stop"}:
+        raise LLMPlannerError(
+            f"SoC response did not complete successfully (finish_reason={finish_reason!r})"
+        )
+    output_text = message.get("content")
+    if not isinstance(output_text, str) or not output_text.strip():
+        raise LLMPlannerError("SoC response contained no message content")
+    return output_text.strip()
+
+
 def parse_decision(
     response: dict[str, Any], evidence: dict[str, Any], *, provider: str = "openai"
 ) -> dict[str, Any]:
@@ -301,6 +391,9 @@ def parse_decision(
     elif provider == "gemini":
         output_text = _gemini_output_text(response)
         token_count = _gemini_token_count(response)
+    elif provider == "soc":
+        output_text = _soc_output_text(response)
+        token_count = _openai_token_count(response)
     else:
         raise LLMPlannerError(f"Unsupported LLM provider: {provider!r}")
     try:
@@ -336,7 +429,12 @@ def parse_decision(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="API-key LLM research planner")
-    parser.add_argument("--provider", choices=("openai", "gemini"), default="openai")
+    parser.add_argument("--provider", choices=("openai", "gemini", "soc"), default="openai")
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        help="Let a SoC reasoning model emit chain-of-thought before its decision.",
+    )
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--decision", required=True)
     parser.add_argument("--model")
@@ -357,16 +455,30 @@ def main(argv: list[str] | None = None) -> int:
             model = args.model or os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
             base_url = args.base_url or os.environ.get("GEMINI_BASE_URL", GEMINI_BASE_URL)
             api_key_env = args.api_key_env or "GEMINI_API_KEY"
+        elif args.provider == "soc":
+            model = args.model or os.environ.get("SOC_MODEL", SOC_MODEL)
+            base_url = args.base_url or os.environ.get("SOC_BASE_URL", SOC_BASE_URL)
+            api_key_env = args.api_key_env or "SOC_API_KEY"
         else:
             model = args.model or os.environ.get("OPENAI_MODEL", OPENAI_MODEL)
             base_url = args.base_url or os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL)
             api_key_env = args.api_key_env or "OPENAI_API_KEY"
         evidence = read_json(Path(args.evidence))
-        payload = (
-            build_gemini_request(evidence, max_output_tokens=args.max_output_tokens)
-            if args.provider == "gemini"
-            else build_request(evidence, model=model, max_output_tokens=args.max_output_tokens)
-        )
+        if args.provider == "gemini":
+            payload = build_gemini_request(
+                evidence, max_output_tokens=args.max_output_tokens
+            )
+        elif args.provider == "soc":
+            payload = build_soc_request(
+                evidence,
+                model=model,
+                max_output_tokens=args.max_output_tokens,
+                enable_thinking=args.enable_thinking,
+            )
+        else:
+            payload = build_request(
+                evidence, model=model, max_output_tokens=args.max_output_tokens
+            )
         if args.mock_response:
             response = read_json(Path(args.mock_response))
         else:
@@ -375,22 +487,28 @@ def main(argv: list[str] | None = None) -> int:
                 raise LLMPlannerError(
                     f"Missing API key: set the {api_key_env} environment variable"
                 )
-            response = (
-                request_gemini(
+            if args.provider == "gemini":
+                response = request_gemini(
                     payload,
                     api_key=api_key,
                     model=model,
                     base_url=base_url,
                     timeout_seconds=args.api_timeout_seconds,
                 )
-                if args.provider == "gemini"
-                else request_openai(
+            elif args.provider == "soc":
+                response = request_soc(
                     payload,
                     api_key=api_key,
                     base_url=base_url,
                     timeout_seconds=args.api_timeout_seconds,
                 )
-            )
+            else:
+                response = request_openai(
+                    payload,
+                    api_key=api_key,
+                    base_url=base_url,
+                    timeout_seconds=args.api_timeout_seconds,
+                )
         decision = parse_decision(response, evidence, provider=args.provider)
         atomic_write_json(Path(args.decision), decision)
         return 0

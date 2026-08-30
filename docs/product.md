@@ -117,13 +117,13 @@ The final artifact passed row-alignment validation, required no manual intervent
 
 ## Current planners
 
-The default demo uses the external-agent protocol with the deterministic `automl_agent.planner_cli`. The API-backed demo uses `automl_agent.llm_planner_cli`, which sends the sanitized EvidencePack to Gemini 3.7 Flash and requests a structured JSON decision. OpenAI remains supported as an alternate provider. Both planners can only select from the reviewed experiment catalog; neither can supply commands or change metrics, splits, budgets, promotion rules, or hidden-test policy.
+The default demo uses the external-agent protocol with the deterministic `automl_agent.planner_cli`. The API-backed demo uses `automl_agent.llm_planner_cli`, which sends the sanitized EvidencePack to the NUS SoC Chat Completions endpoint and requests a structured JSON decision from `qwen3.8:27b`. Gemini and OpenAI remain supported as alternate providers. Both planners can only select from the reviewed experiment catalog; neither can supply commands or change metrics, splits, budgets, promotion rules, or hidden-test policy.
 
-The Gemini planner reads `GEMINI_API_KEY` from the ignored root `.env`, reports token usage, and stores only non-thinking response text containing the concise decision rationale. The key is sent in the `x-goog-api-key` header and is never written to run artifacts. If the external planner fails, the configuration either fails closed or records a deterministic catalog fallback.
+The SoC planner reads `SOC_API_KEY` from the ignored root `.env`, reports token usage, and stores only the locally validated concise decision rationale. The key is sent in the HTTPS `Authorization` header and is never written to run artifacts. If the external planner fails, the configuration either fails closed or records a deterministic catalog fallback.
 
 ```dotenv
 # .env
-GEMINI_API_KEY=your_real_key_here
+SOC_API_KEY=your_real_key_here
 ```
 
 ```powershell
@@ -131,4 +131,10 @@ python -m automl_agent --config configs/demo-llm.json preflight
 python -m automl_agent --config configs/demo-llm.json run --run-id llm-demo-001
 ```
 
-The offline LLM tests use a local fake Gemini endpoint and captured reasoning fixtures, so regression tests make no external calls and incur no API cost.
+The offline LLM tests use a local fake SoC-compatible endpoint and captured reasoning fixtures, so regression tests make no external calls and incur no API cost.
+
+## Live progress and failure logs
+
+`run` and `resume` print timestamped progress events to stderr while preserving the final state JSON on stdout. Events identify baseline execution, planner waits, retry attempts, selected experiments, validation results, promotion status, and finalization. Commands running longer than ten seconds emit recurring `WAIT` lines with elapsed and remaining time.
+
+On child-process failure, the terminal shows the classified failure and the last useful stderr line, such as an API HTTP 503 high-demand response. Full stdout, stderr, and heartbeat files remain under the path printed in each `START` line. Transient planner failures are retried once within the configured planner timeout before fallback or failure.

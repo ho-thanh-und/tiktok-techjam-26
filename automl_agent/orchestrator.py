@@ -12,7 +12,7 @@ from .contracts import validate_contract
 from .errors import AgentError, BudgetError, ContractError, ExecutionFailure
 from .io_utils import atomic_write_json, read_json, sha256_file, utc_timestamp
 from .planner import CatalogResearchPlanner, ExternalResearchPlanner, PlanDecision
-from .runner import render_command, run_command
+from .runner import log_progress, render_command, run_command
 from .storage import RunStore
 
 
@@ -85,6 +85,7 @@ class AutonomousRun:
         output_dir: Path,
         timeout_seconds: int,
         values: dict[str, str],
+        label: str,
     ) -> list[dict[str, Any]]:
         attempts: list[dict[str, Any]] = []
         maximum_attempts = 2 if self.config.retry_transient_once else 1
@@ -108,6 +109,7 @@ class AutonomousRun:
                     output_dir=attempt_dir,
                     timeout_seconds=remaining_timeout,
                     poll_seconds=self.config.command_poll_seconds,
+                    label=f"{label} (attempt {attempt}/{maximum_attempts})",
                 )
                 attempts.append(
                     {
@@ -138,6 +140,12 @@ class AutonomousRun:
                     "transient_retry",
                     {"attempt": attempt, "command": list(argv), "error": str(exc)},
                 )
+                log_progress(
+                    "RETRY",
+                    label,
+                    attempt=attempt + 1,
+                    reason="transient failure",
+                )
         raise AssertionError("unreachable")
 
     @staticmethod
@@ -161,7 +169,9 @@ class AutonomousRun:
             resources.get("llm_tokens", 0)
         )
 
-    def _validate_submission(self, submission_path: Path, output_dir: Path) -> list[dict[str, Any]]:
+    def _validate_submission(
+        self, submission_path: Path, output_dir: Path, *, label: str = "submission validation"
+    ) -> list[dict[str, Any]]:
         if not submission_path.is_file():
             raise ExecutionFailure(
                 f"Expected submission was not created: {submission_path}",
@@ -173,10 +183,12 @@ class AutonomousRun:
             output_dir=output_dir,
             timeout_seconds=self.config.validation_timeout_seconds,
             values=values,
+            label=label,
         )
 
     def _run_baseline(self, state: dict[str, Any]) -> None:
         if state.get("baseline"):
+            log_progress("SKIP", "baseline already reproduced")
             return
         require_capacity(
             self.config,
@@ -197,11 +209,13 @@ class AutonomousRun:
         state["status"] = "baseline_running"
         self.store.save_state(state)
         self.store.append_event("baseline_started", {})
+        log_progress("STAGE", "reproducing baseline")
         attempts = self._execute_with_recovery(
             self.config.baseline_command,
             output_dir=baseline_dir / "execution",
             timeout_seconds=self.config.baseline_timeout_seconds,
             values=values,
+            label="baseline training and scoring",
         )
         if not result_path.is_file():
             raise ExecutionFailure("Official baseline did not create result JSON", failure_class="schema_alignment")
@@ -214,7 +228,9 @@ class AutonomousRun:
                     f"Official baseline mismatch for {name}: expected {expected}, got {actual} "
                     f"(tolerance {self.config.baseline_tolerance})"
                 )
-        validation_attempts = self._validate_submission(submission_path, baseline_dir / "validation")
+        validation_attempts = self._validate_submission(
+            submission_path, baseline_dir / "validation", label="baseline submission validation"
+        )
         self._account_resources(
             state,
             resources=resources,
@@ -239,6 +255,7 @@ class AutonomousRun:
         state["status"] = "running"
         self.store.save_state(state)
         self.store.append_event("baseline_reproduced", {"metrics": metrics, "score": score})
+        log_progress("RESULT", "baseline reproduced", score=f"{score:.6f}", metrics=metrics)
 
     def _recover_interrupted_iteration(self, state: dict[str, Any]) -> None:
         active = state.get("active_experiment")
@@ -294,6 +311,12 @@ class AutonomousRun:
         }
         self.store.save_state(state)
         self.store.append_event("experiment_started", proposal)
+        log_progress(
+            "STAGE",
+            "running experiment",
+            iteration=iteration,
+            experiment_id=experiment.experiment_id,
+        )
 
         values = self._render_values(
             result_path=str(result_path),
@@ -310,12 +333,15 @@ class AutonomousRun:
                 output_dir=experiment_dir / "execution",
                 timeout_seconds=experiment.timeout_seconds,
                 values=values,
+                label=f"experiment {iteration}: {experiment.experiment_id}",
             )
             if not result_path.is_file():
                 raise ExecutionFailure("Experiment did not create result JSON", failure_class="schema_alignment")
             metrics, score, resources = _score_from_result(self.config, read_json(result_path))
             validation_attempts = self._validate_submission(
-                submission_path, experiment_dir / "validation"
+                submission_path,
+                experiment_dir / "validation",
+                label=f"experiment {iteration} submission validation",
             )
             self._account_resources(
                 state,
@@ -395,6 +421,14 @@ class AutonomousRun:
                 "selection_score": record.get("selection_score"),
             },
         )
+        log_progress(
+            "RESULT",
+            "experiment completed",
+            iteration=iteration,
+            experiment_id=experiment.experiment_id,
+            status=record["status"],
+            score=record.get("selection_score"),
+        )
 
     def _finalize(self, state: dict[str, Any], reason: str) -> None:
         incumbent = state.get("incumbent")
@@ -406,7 +440,9 @@ class AutonomousRun:
         final_submission = self.store.root / "final_submission.csv"
         shutil.copy2(source, final_submission)
         validation_attempts = self._validate_submission(
-            final_submission, self.store.root / "final_validation"
+            final_submission,
+            self.store.root / "final_validation",
+            label="final submission validation",
         )
         final = {
             "designated_at": utc_timestamp(),
@@ -429,6 +465,13 @@ class AutonomousRun:
         state["stop_reason"] = reason
         self.store.save_state(state)
         self.store.append_event("run_completed", final)
+        log_progress(
+            "COMPLETE",
+            "run finalized",
+            stop_reason=reason,
+            final_experiment=incumbent["experiment_id"],
+            score=incumbent["selection_score"],
+        )
 
     def execute(self, *, resume: bool = False) -> dict[str, Any]:
         try:
@@ -452,8 +495,10 @@ class AutonomousRun:
                 return state
             self._recover_interrupted_iteration(state)
             self.store.append_event("run_resumed", {})
+            log_progress("RUN", "resuming autonomous run", run_id=self.store.run_id)
         else:
             state = self.store.create()
+            log_progress("RUN", "starting autonomous run", run_id=self.store.run_id)
         atomic_write_json(self.store.root / "contract_report.json", self.contract_report)
 
         try:
@@ -469,6 +514,13 @@ class AutonomousRun:
                 if current.remaining_seconds <= self.config.validation_timeout_seconds:
                     reason = "wall_clock_budget"
                     break
+                log_progress(
+                    "PLAN",
+                    "requesting next experiment decision",
+                    next_iteration=int(state.get("iterations_used", 0)) + 1,
+                    iterations_remaining=current.iterations_remaining,
+                    wall_seconds_remaining=f"{current.remaining_seconds:.1f}",
+                )
                 decision = self.planner.choose(self.config, state)
                 if decision is None:
                     reason = "experiment_catalog_exhausted"
@@ -480,6 +532,14 @@ class AutonomousRun:
                     state["resources"].get("llm_tokens", 0)
                 ) + decision.planner_llm_tokens
                 self.store.save_state(state)
+                log_progress(
+                    "DECISION",
+                    "planner selected experiment",
+                    experiment_id=decision.experiment.experiment_id,
+                    planner_mode=decision.planner_mode,
+                    reason=decision.reason,
+                    llm_tokens=decision.planner_llm_tokens,
+                )
                 try:
                     self._run_experiment(state, decision)
                 except BudgetError:
@@ -492,4 +552,5 @@ class AutonomousRun:
             state["stop_reason"] = str(exc)
             self.store.save_state(state)
             self.store.append_event("run_failed", {"error": str(exc), "type": type(exc).__name__})
+            log_progress("ERROR", "run failed", error=str(exc))
             raise

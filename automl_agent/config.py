@@ -124,21 +124,32 @@ def load_config(path: str | Path) -> AgentConfig:
         planner_command = _command(planner.get("command"), "planner.command")
     elif planner_mode == "llm":
         provider = str(planner.get("provider", "openai"))
-        if provider not in {"openai", "gemini"}:
-            raise ContractError("planner.provider must be openai or gemini")
-        default_model = "gemini-3.7-flash" if provider == "gemini" else "gpt-5-mini"
+        if provider not in {"openai", "gemini", "soc"}:
+            raise ContractError("planner.provider must be openai, gemini, or soc")
+        default_models = {
+            "openai": "gpt-5-mini",
+            "gemini": "gemini-3.7-flash",
+            "soc": "qwen3.8:27b",
+        }
+        default_model = default_models[provider]
         model = str(planner.get("model", default_model))
         if not model.strip():
             raise ContractError("planner.model must be a non-empty string")
-        default_base_url = (
-            "https://generativelanguage.googleapis.com/v1beta"
-            if provider == "gemini"
-            else "https://api.openai.com/v1"
-        )
+        default_base_urls = {
+            "openai": "https://api.openai.com/v1",
+            "gemini": "https://generativelanguage.googleapis.com/v1beta",
+            "soc": "https://soclaas-api.comp.nus.edu.sg/v1",
+        }
+        default_base_url = default_base_urls[provider]
         base_url = str(planner.get("base_url", default_base_url))
         if not base_url.startswith(("https://", "http://127.0.0.1:", "http://localhost:")):
             raise ContractError("planner.base_url must use HTTPS or a loopback HTTP address")
-        default_key_env = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
+        default_key_envs = {
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "soc": "SOC_API_KEY",
+        }
+        default_key_env = default_key_envs[provider]
         api_key_env = str(planner.get("api_key_env", default_key_env))
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", api_key_env):
             raise ContractError("planner.api_key_env must be a valid environment-variable name")
@@ -148,10 +159,20 @@ def load_config(path: str | Path) -> AgentConfig:
         planner_env_file = _resolve(workspace, env_file_value)
         api_timeout_seconds = float(planner.get("api_timeout_seconds", 60))
         max_output_tokens = int(planner.get("max_output_tokens", 1200))
+        enable_thinking = planner.get("enable_thinking", False)
+        if not isinstance(enable_thinking, bool):
+            raise ContractError("planner.enable_thinking must be a boolean")
+        if provider != "soc" and enable_thinking:
+            raise ContractError("planner.enable_thinking is only supported for provider soc")
         if api_timeout_seconds <= 0:
             raise ContractError("planner.api_timeout_seconds must be positive")
         if max_output_tokens <= 0:
             raise ContractError("planner.max_output_tokens must be positive")
+        if enable_thinking and max_output_tokens < 4000:
+            raise ContractError(
+                "planner.max_output_tokens must be at least 4000 when enable_thinking is true; "
+                "reasoning tokens are billed against the same budget as the decision"
+            )
         planner_provider = provider
         planner_model = model
         planner_api_key_env = api_key_env
@@ -177,7 +198,7 @@ def load_config(path: str | Path) -> AgentConfig:
             str(api_timeout_seconds),
             "--max-output-tokens",
             str(max_output_tokens),
-        )
+        ) + (("--enable-thinking",) if enable_thinking else ())
 
     names = metrics.get("names")
     if not isinstance(names, list) or not names or not all(isinstance(x, str) for x in names):

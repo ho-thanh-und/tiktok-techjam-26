@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 
 from .config import AgentConfig, Experiment, placeholders
 from .errors import ExecutionFailure
 from .io_utils import atomic_write_json, read_json, utc_timestamp
-from .runner import render_command, run_command
+from .runner import log_progress, render_command, run_command
 from .storage import RunStore
 
 
@@ -112,25 +113,65 @@ class ExternalResearchPlanner:
         evidence_path = planner_dir / "evidence.json"
         decision_path = planner_dir / "decision.json"
         atomic_write_json(evidence_path, self._evidence_pack(state))
-        values = {
-            **placeholders(config),
-            "run_dir": str(self.store.root),
-            "evidence_path": str(evidence_path),
-            "decision_path": str(decision_path),
-        }
         try:
-            result = run_command(
-                render_command(config.planner_command or (), values),
-                cwd=config.workspace,
-                output_dir=planner_dir / "execution",
-                timeout_seconds=config.planner_timeout_seconds,
-                poll_seconds=config.command_poll_seconds,
-            )
-            if not decision_path.is_file():
+            maximum_attempts = 2 if config.retry_transient_once else 1
+            planner_started = time.monotonic()
+            result = None
+            successful_decision_path = None
+            for attempt in range(1, maximum_attempts + 1):
+                attempt_decision_path = planner_dir / f"decision-attempt-{attempt}.json"
+                values = {
+                    **placeholders(config),
+                    "run_dir": str(self.store.root),
+                    "evidence_path": str(evidence_path),
+                    "decision_path": str(attempt_decision_path),
+                }
+                remaining_timeout = config.planner_timeout_seconds - (
+                    time.monotonic() - planner_started
+                )
+                if remaining_timeout <= 0:
+                    raise ExecutionFailure(
+                        "Planner retry budget exhausted", failure_class="timeout"
+                    )
+                try:
+                    result = run_command(
+                        render_command(config.planner_command or (), values),
+                        cwd=config.workspace,
+                        output_dir=planner_dir / "execution" / f"attempt-{attempt}",
+                        timeout_seconds=remaining_timeout,
+                        poll_seconds=config.command_poll_seconds,
+                        label=f"LLM planner decision {decision_number} (attempt {attempt}/{maximum_attempts})",
+                    )
+                    successful_decision_path = attempt_decision_path
+                    break
+                except ExecutionFailure as exc:
+                    self.store.append_event(
+                        "planner_attempt_failed",
+                        {
+                            "decision": decision_number,
+                            "attempt": attempt,
+                            "failure_class": exc.failure_class,
+                            "error": str(exc),
+                        },
+                    )
+                    if exc.failure_class != "transient" or attempt >= maximum_attempts:
+                        raise
+                    log_progress(
+                        "RETRY",
+                        "LLM planner transient failure",
+                        decision=decision_number,
+                        next_attempt=attempt + 1,
+                        backoff_seconds=2,
+                    )
+                    time.sleep(min(2.0, max(0.0, remaining_timeout)))
+            if result is None or successful_decision_path is None:
+                raise ExecutionFailure("Planner produced no successful attempt")
+            if not successful_decision_path.is_file():
                 raise ExecutionFailure(
                     "Planner command did not create decision JSON", failure_class="schema_alignment"
                 )
-            raw = read_json(decision_path)
+            raw = read_json(successful_decision_path)
+            atomic_write_json(decision_path, raw)
             experiment_id = raw.get("experiment_id")
             if experiment_id not in available:
                 raise ExecutionFailure(
@@ -155,7 +196,7 @@ class ExternalResearchPlanner:
                 experiment=available[experiment_id],
                 reason=reason,
                 evidence=tuple(evidence),
-                planner_command_seconds=result.elapsed_seconds,
+                planner_command_seconds=time.monotonic() - planner_started,
                 planner_llm_tokens=llm_tokens,
                 planner_mode=config.planner_mode,
             )
