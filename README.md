@@ -1,34 +1,58 @@
 # Autonomous ML Research Agent
 
-This repository now includes a working, resumable autonomous ML control plane. Start with the [product guide](docs/product.md) and repository rules in [AGENTS.md](AGENTS.md).
+This repository includes a working, resumable autonomous ML control plane.
+
+**To run anything, read [docs/running.md](docs/running.md)** — every command there
+is verified, with expected output. Start with the [product guide](docs/product.md)
+and repository rules in [AGENTS.md](AGENTS.md).
 
 ```powershell
 python -m automl_agent --config configs/demo.json preflight
 python -m automl_agent --config configs/demo.json run --run-id demo-001
-python -m unittest discover -s tests -v
+python -m pytest tests/ -q
 python -m automl_agent --config configs/demo.json serve --port 8765
 ```
 
-To let the NUS SoC-hosted planner choose each catalog experiment, open the ignored root `.env` file and set:
+### Which track am I on?
+
+Three configurations measure three different things. Their numbers are **not**
+comparable, and conflating them is the easiest mistake to make here.
+
+| Track | Config | Data | Status |
+|---|---|---|---|
+| Demo | `demo.json`, `demo-llm.json` | synthetic, 20 users x 80 items | plumbing test only; the winning strategy *is* the generative model, so its score is at the oracle ceiling and means nothing about model quality |
+| Public research | `kuairand-public-research.json` | real KuaiRand-Pure | closest runnable proxy for the contract |
+| Competition | `competition.example.json` | organizer-supplied | intentionally fails closed until the baseline, evaluator, split, selection score, and schema are supplied |
+
+A fourth **legacy** track (`baseline.py`, `evaluate.py`, `submit.py`) implements
+the original `long_view` + GAUC/nDCG@5 protocol. See the Legacy section below —
+it does not match the current contract.
+
+### LLM planner
+
+To let the NUS SoC-hosted planner choose each catalog experiment, set the key in
+the git-ignored root `.env`:
 
 ```dotenv
 SOC_API_KEY=your_real_key_here
 ```
-
-Then use the LLM configuration:
 
 ```powershell
 python -m automl_agent --config configs/demo-llm.json preflight
 python -m automl_agent --config configs/demo-llm.json run --run-id llm-demo-001
 ```
 
-The `.env` file is excluded from Git. The key is not copied into configuration or artifacts. The default SoC model is `qwen3.8:27b`; offline tests use a local compatible endpoint and make no external API calls.
+The key never enters configuration, command arguments, the EvidencePack, or run
+artifacts. The default SoC model is `qwen3.8:27b`, a reasoning model whose
+chain-of-thought is charged against the token budget, so the planner disables
+thinking by default; see [docs/running.md](docs/running.md#troubleshooting).
+Offline tests use a local mock endpoint and make no external API calls.
 
-During a run, timestamped `START`, `WAIT`, `FAIL`, `RETRY`, `DECISION`, `RESULT`, and `COMPLETE` messages show live progress. Full child-process logs remain under `artifacts/agent_runs/<run-id>/`; transient API failures are shown directly and retried once.
+During a run, timestamped `START`, `WAIT`, `FAIL`, `RETRY`, `DECISION`, `RESULT`,
+and `COMPLETE` messages stream to stderr while the final summary goes to stdout.
+Full child-process logs stay under `artifacts/agent_runs/<run-id>/`; transient API
+failures are retried once.
 
-The demo exercises click-positive NDCG@10/Recall@50 orchestration end to end. The competition configuration intentionally fails closed until the organizer-provided baseline, evaluator, split, official selection score, and schema are supplied.
-
-With the public KuaiRand-Pure files installed, `configs/kuairand-public-research.json` provides a real-data integration run. It is explicitly non-competition and cannot substitute for the organizer protocol.
 
 ## Legacy KuaiRand-Pure Starter Kit
 
